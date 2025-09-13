@@ -5,12 +5,3 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("", include("agent.urls")),  # 👈 ye line zaroori hai
 ]
-
-
-
-
-
-
-
-
-
