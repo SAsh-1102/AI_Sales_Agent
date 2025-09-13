@@ -150,11 +150,32 @@
       };
     });
 
-    // welcome msg
-    window.addEventListener('load', () => {
-      addMessage('bot', "🤖 Welcome! I'm your AI sales assistant. Type or speak your question.");
-      const utterance = new SpeechSynthesisUtterance("Welcome! I'm your AI sales assistant. You can type or speak your question.");
-      speechSynthesis.speak(utterance);
+    // ---- Page load: fetch and show past history ----
+    window.addEventListener('load', async () => {
+      try {
+        const res = await fetch("{% url 'chat_api' %}", {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ session_id: sessionId, message: "" })
+        });
+        const data = await res.json();
+
+        if (data.history && data.history.length) {
+          data.history.forEach(msg => addMessage(msg.sender, msg.message));
+        }
+
+        setLeadStage(data.lead_stage || 'cold');
+        setEmotion(data.emotion || 'neutral');
+
+        if (!data.history.length) {
+          addMessage('bot', "🤖 Welcome! I'm your AI sales assistant. Type or speak your question.");
+          const utterance = new SpeechSynthesisUtterance("Welcome! I'm your AI sales assistant. You can type or speak your question.");
+          speechSynthesis.speak(utterance);
+        }
+
+      } catch(err) {
+        console.error("Error fetching history:", err);
+      }
     });
   </script>
 </body>
