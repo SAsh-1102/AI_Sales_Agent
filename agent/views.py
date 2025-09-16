@@ -5,123 +5,116 @@ import os
 import requests
 import json
 
-# 👇 Import memory service
 from agent.memory_service import save_message, get_history
+from agent.products_data import products
 
 
-# 👇 Homepage
 def index(request):
     return render(request, "index.html")
 
 
-# 👇 Rule-based fallback (improved)
-def rule_based_lead_and_emotion(user_message):
-    text = user_message.lower()
-
-    # Default
-    lead_stage = "cold"
-    emotion = "neutral"
-    reply_text = "Can you tell me a bit more so I can assist you better?"
-
-    if any(word in text for word in ["price", "cost", "details", "info", "pricing"]):
-        lead_stage = "warm"
-        emotion = "curious"
-        reply_text = "Our pricing starts at $49/month for a basic subscription and goes up to $199/month for enterprise."
-    elif any(word in text for word in ["buy", "purchase", "order", "deal"]):
-        lead_stage = "hot"
-        emotion = "happy"
-        reply_text = "Great choice! I can guide you through the purchase process right away."
-    elif any(word in text for word in ["thanks", "great", "perfect", "love"]):
-        lead_stage = "closed"
-        emotion = "satisfied"
-        reply_text = "We’re happy to serve you! Thanks for trusting us."
-    elif any(word in text for word in ["hello", "hi", "hey"]):
-        reply_text = "Hello! How can I help you today?"
-    elif "website" in text:
-        reply_text = "Yes, we also provide professional website design services. Would you like a demo?"
-    elif "demo" in text:
-        reply_text = "Sure! I can arrange a free demo for you. When would be a good time?"
-    elif "support" in text:
-        reply_text = "Our support team is available 24/7. You can always reach us by chat or email."
-
-    return lead_stage, emotion, reply_text
+def build_product_context():
+    product_lines = []
+    for p in products:
+        details = []
+        for key, value in p.items():
+            if key not in ["stripe_price_id"]:
+                details.append(f"{key}: {value}")
+        product_lines.append(f"Product: {p.get('name', p.get('model'))} | " + " | ".join(details))
+    return "\n".join(product_lines)
 
 
-# 👇 Chat API (Groq LLM + DB memory)
 @csrf_exempt
 def chat_api(request):
-    if request.method == "POST":
-        data = json.loads(request.body.decode("utf-8"))
-        user_message = data.get("message", "")
-        session_id = data.get("session_id", "default")
+    if request.method != "POST":
+        return JsonResponse({"error": "Invalid request"}, status=400)
 
-        # ---- Save user message ----
-        save_message(session_id, "user", user_message)
+    data = json.loads(request.body.decode("utf-8"))
+    user_message = data.get("message", "")
+    session_id = data.get("session_id", "default")
 
-        # ---- Defaults ----
-        lead_stage, emotion = "cold", "neutral"
-        reply_text = "Sorry, LLM not connected."
+    save_message(session_id, "user", user_message)
 
-        GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    reply_text, lead_stage, emotion = "Sorry, I don't have an answer yet.", "cold", "neutral"
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
-        if GROQ_API_KEY:
+    if GROQ_API_KEY:
+        try:
+            product_context = build_product_context()
+            history = get_history(session_id, limit=5)
+            history_text = "\n".join([f"{h.sender}: {h.message}" for h in history])
+
+            system_prompt = f"""
+            You are a strict AI Sales Assistant for TechNerds.
+
+            RULES:
+            - ALWAYS check the following dataset first before answering: 
+              {product_context}
+            - NEVER ask for clarification.
+            - NEVER say "Can you tell me a bit more".
+            - If the user asks about products that are not in the dataset, respond exactly:
+              "Sorry, I don't have information about that product. Please ask about available products or categories."
+            - If comparing products, list clear differences in specs, price, and category.
+            - If the user is ready to buy, encourage them.
+            - Keep answers short, professional, and confident.
+            - Reply STRICTLY in JSON:
+              {{"reply": "...", "lead_stage": "cold|warm|hot|closed", "emotion": "neutral|curious|happy|satisfied"}}
+            """
+
+            payload = {
+                "model": "mixtral-8x7b-32768",  # ✅ switched model
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                    {"role": "assistant", "content": history_text}
+                ]
+            }
+
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+
+            r = requests.post("https://api.groq.com/openai/v1/chat/completions",
+                              headers=headers, json=payload, timeout=20)
+            resp_json = r.json()
+            raw_reply = resp_json["choices"][0]["message"]["content"].strip()
+
             try:
-                headers = {
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "model": "llama-3.1-8b-instant",
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are an AI sales assistant. "
-                                "Return response in strict JSON only with keys: reply, lead_stage, emotion. "
-                                "Example:\n"
-                                "{\"reply\": \"Our product helps you save time!\", \"lead_stage\": \"warm\", \"emotion\": \"curious\"}"
-                            )
-                        },
-                        {"role": "user", "content": user_message}
-                    ]
-                }
-                r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
-                resp_json = r.json()
-                raw_reply = resp_json["choices"][0]["message"]["content"].strip()
-
                 parsed = json.loads(raw_reply.replace("'", '"'))
-                reply_text = parsed.get("reply", "I'm here to assist you.")
+                reply_text = parsed.get("reply", raw_reply)
                 lead_stage = parsed.get("lead_stage", "cold")
                 emotion = parsed.get("emotion", "neutral")
+            except json.JSONDecodeError:
+                reply_text = raw_reply
 
-            except Exception:
-                lead_stage, emotion, reply_text = rule_based_lead_and_emotion(user_message)
-        else:
-            lead_stage, emotion, reply_text = rule_based_lead_and_emotion(user_message)
+            # ✅ Post-processing filter: Remove "Can you tell me..." or clarification prompts
+            if "can you tell me a bit more" in reply_text.lower():
+                reply_text = "Sorry, I don't have information about that product. Please ask about available products or categories."
+                lead_stage = "cold"
+                emotion = "neutral"
 
-        # ---- Save agent reply ----
-        save_message(session_id, "agent", reply_text)
+        except Exception as e:
+            reply_text = f"Sorry, I had an issue: {str(e)}"
 
-        # ---- Get full history ----
-        history = get_history(session_id, limit=50)
-        history_data = [{"sender": h.sender, "message": h.message, "time": h.timestamp.strftime("%H:%M")} for h in history]
+    save_message(session_id, "agent", reply_text)
 
-        return JsonResponse({
-            "reply": reply_text,
-            "lead_stage": lead_stage,
-            "emotion": emotion,
-            "history": history_data
-        })
+    history = get_history(session_id, limit=50)
+    history_data = [
+        {"sender": h.sender, "message": h.message, "time": h.timestamp.strftime("%H:%M")}
+        for h in history
+    ]
 
-    return JsonResponse({"error": "Invalid request"}, status=400)
+    return JsonResponse({
+        "reply": reply_text,
+        "lead_stage": lead_stage,
+        "emotion": emotion,
+        "history": history_data
+    })
 
 
-# 👇 Voice API placeholder
 @csrf_exempt
 def voice_api(request):
     if request.method != "POST":
         return JsonResponse({"error": "Invalid request"}, status=400)
-    return JsonResponse({
-        "status": "ok",
-        "message": "Voice API placeholder. Will be implemented in Phase 4."
-    })
+    return JsonResponse({"status": "ok", "message": "Voice API placeholder."})

@@ -5,9 +5,6 @@ from dotenv import load_dotenv
 # Load environment variables from .env if exists
 load_dotenv()
 
-
-
-
 # Base directory (where manage.py is located)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
