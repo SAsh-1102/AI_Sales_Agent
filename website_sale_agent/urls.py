@@ -1,8 +1,9 @@
-# website_sales_agent/urls.py (or AI_Sales_Agent/urls.py depending on your folder name)
 from django.contrib import admin
 from django.urls import path, include
+from agent.views import index  # for homepage
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
-    path("agent/", include("agent.urls")), 
+    path("admin/", admin.site.urls),    # Admin panel
+    path("agent/", include("agent.urls")),  # Agent API
+    path("", index, name="home"),       # Homepage at '/'
 ]

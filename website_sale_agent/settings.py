@@ -1,6 +1,10 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+# settings.py
+TIME_ZONE = 'Asia/Karachi'
+USE_TZ = True
+
 
 # Load environment variables from .env if exists
 load_dotenv()
