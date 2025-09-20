@@ -65,21 +65,18 @@
     }
 
     let recognition;
+    let voiceEnabled = true;
 
     function addMessage(who, text, timestamp=null) {
       const d = document.createElement('div');
       d.className = 'message ' + (who === 'user' ? 'user' : 'bot');
-      
-      // ✅ Just display plain text, even if backend sends "__TABLE__"
       d.textContent = text.replace("__TABLE__", "");
-      
       if (timestamp) {
         const ts = document.createElement('div');
         ts.className = 'timestamp';
         ts.textContent = timestamp;
         d.appendChild(ts);
       }
-
       chatEl.appendChild(d);
       chatEl.scrollTop = chatEl.scrollHeight;
     }
@@ -87,7 +84,9 @@
     function setLeadStage(stage) {
       leadBadge.textContent = 'Lead: ' + stage;
       leadBadge.className = 'badge ' +
-        (stage === 'cold' ? 'stage-cold' : stage === 'warm' ? 'stage-warm' : stage === 'hot' ? 'stage-hot' : 'stage-closed');
+        (stage === 'cold' ? 'stage-cold' :
+         stage === 'warm' ? 'stage-warm' :
+         stage === 'hot' ? 'stage-hot' : 'stage-closed');
     }
 
     function setEmotion(e) {
@@ -95,10 +94,8 @@
     }
 
     async function sendMessageFromUI(text) {
-      if (!text) return;
-
-      const currentTime = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Karachi', hour12: true });
-      addMessage('user', text, currentTime);
+      if (!text.trim()) return;
+      addMessage('user', text, new Date().toLocaleString('en-GB', { timeZone: 'Asia/Karachi', hour12: true }));
 
       const typingEl = document.createElement('div');
       typingEl.className = 'message bot';
@@ -116,26 +113,24 @@
 
         typingEl.remove();
 
-        const botTime = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Karachi', hour12: true });
-        addMessage('bot', data.reply, botTime);
-
+        addMessage('bot', data.reply, new Date().toLocaleString('en-GB', { timeZone: 'Asia/Karachi', hour12: true }));
         setLeadStage(data.lead_stage || 'cold');
         setEmotion(data.emotion || 'neutral');
 
-        const utterance = new SpeechSynthesisUtterance(data.reply.replace("__TABLE__", ""));
-        utterance.lang = "en-US";
-        speechSynthesis.speak(utterance);
+        if (voiceEnabled) {
+          const utterance = new SpeechSynthesisUtterance(data.reply.replace("__TABLE__", ""));
+          utterance.lang = "en-US";
+          speechSynthesis.speak(utterance);
+        }
 
       } catch (err) {
-        console.error(err);
         typingEl.remove();
-        addMessage('bot', 'Error contacting server.', new Date().toLocaleString('en-GB', { timeZone: 'Asia/Karachi', hour12: true }));
+        addMessage('bot', '⚠️ Error contacting server.', new Date().toLocaleString('en-GB', { timeZone: 'Asia/Karachi', hour12: true }));
       }
     }
 
     sendBtn.addEventListener('click', () => {
-      const val = inputEl.value.trim();
-      sendMessageFromUI(val);
+      sendMessageFromUI(inputEl.value);
       inputEl.value = '';
     });
 
@@ -162,7 +157,7 @@
       };
 
       recognition.onerror = (event) => {
-        addMessage('bot', '🎤 Speech recognition error: ' + event.error, new Date().toLocaleString('en-GB', { timeZone: 'Asia/Karachi', hour12: true }));
+        addMessage('bot', '🎤 Speech recognition error: ' + event.error);
         micStartBtn.disabled = false;
         micStopBtn.disabled = true;
       };
@@ -177,6 +172,7 @@
       if (recognition) recognition.stop();
     });
 
+    // Load chat history
     window.addEventListener('load', async () => {
       try {
         const res = await fetch("{% url 'chat_api' %}", {
@@ -186,8 +182,8 @@
         });
         const data = await res.json();
 
-        if (data.history && data.history.length) {
-          data.history.forEach(msg => addMessage(msg.sender, msg.message, msg.time));
+        if (Array.isArray(data.history)) {
+          data.history.forEach(msg => addMessage(msg.sender, msg.message, msg.timestamp));
         }
 
         setLeadStage(data.lead_stage || 'cold');
@@ -196,8 +192,7 @@
         if (!data.history || !data.history.length) {
           addMessage('bot', "🤖 Welcome! I'm your AI sales assistant. Type or speak your question.", new Date().toLocaleString('en-GB', { timeZone: 'Asia/Karachi', hour12: true }));
         }
-
-      } catch(err) {
+      } catch (err) {
         console.error("Error fetching history:", err);
       }
     });
